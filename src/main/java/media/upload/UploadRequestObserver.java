@@ -19,17 +19,29 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
     }
 
     private UploadFile uploadFile;
+    private long expectedBytes;
+    private String filename;
+
+    String filename() {
+        return filename;
+    }
+    private boolean metadataReceived;
     private boolean readySent;
     private boolean finished;
 
     @Override
-    public void onNext(UploadRequest request) {
+    public synchronized void onNext(UploadRequest request) {
         if (finished) {
             return;
         }
 
-        if (!readySent) {
+        if (!metadataReceived) {
             handleMetadata(request);
+            return;
+        }
+
+        if (!readySent) {
+            reject("Wait for READY before sending video chunks.");
             return;
         }
 
@@ -48,18 +60,30 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
             return;
         }
 
+        filename = metadata.getFilename();
+        expectedBytes = metadata.getExpectedBytes();
+        metadataReceived = true;
+        switch (uploadService.admit(this)) {
+            case START_NOW -> startUpload();
+            case QUEUED -> sendStatus(UploadStatus.QUEUED);
+            case FULL -> fail(Status.RESOURCE_EXHAUSTED, "Upload queue is full.");
+        }
+    }
+
+    synchronized void startUpload() {
+        if (finished || readySent) {
+            return;
+        }
+
         try {
-            uploadFile = uploadService.openUpload(metadata.getExpectedBytes());
+            uploadFile = uploadService.openUpload(expectedBytes);
         } catch (IOException error) {
             fail(Status.INTERNAL, "Could not open the upload file.");
             return;
         }
 
         readySent = true;
-        UploadResponse response = UploadResponse.newBuilder()
-                .setStatus(UploadStatus.READY)
-                .build();
-        responses.onNext(response);
+        sendStatus(UploadStatus.READY);
     }
 
     private void handleChunk(UploadRequest request) {
@@ -79,8 +103,10 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
 
     @Override
     public void onError(Throwable error) {
-        finished = true;
-        discardPartialFile();
+        if (finished) {
+            return;
+        }
+        finishUpload();
     }
 
     @Override
@@ -90,12 +116,12 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
         }
 
         if (!readySent) {
-            reject("Upload metadata is required.");
+            reject("Upload ended before the consumer was ready.");
             return;
         }
 
         try {
-            uploadFile.complete();
+            uploadFile.complete(filename);
         } catch (IllegalArgumentException error) {
             reject(error.getMessage());
             return;
@@ -104,12 +130,13 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
             return;
         }
 
-        finished = true;
-        UploadResponse response = UploadResponse.newBuilder()
-                .setStatus(UploadStatus.COMPLETED)
-                .build();
-        responses.onNext(response);
-        responses.onCompleted();
+        try {
+            System.out.println("Video received: " + filename + " (" + expectedBytes + " bytes)");
+            sendStatus(UploadStatus.COMPLETED);
+            responses.onCompleted();
+        } finally {
+            finishUpload();
+        }
     }
 
     private void reject(String message) {
@@ -117,11 +144,20 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
     }
 
     private void fail(Status status, String message) {
-        finished = true;
-        discardPartialFile();
+        finishUpload();
         responses.onError(status
                 .withDescription(message)
                 .asRuntimeException());
+    }
+
+    private void finishUpload() {
+        finished = true;
+        discardPartialFile();
+        uploadService.release(this);
+    }
+
+    private void sendStatus(UploadStatus status) {
+        responses.onNext(UploadResponse.newBuilder().setStatus(status).build());
     }
 
     private void discardPartialFile() {

@@ -6,6 +6,24 @@ import java.nio.file.Path;
 import java.util.Locale;
 
 public class UploadService {
+    private final UploadQueue queue;
+
+    public UploadService(int activeLimit, int waitingLimit) {
+        queue = new UploadQueue(activeLimit, waitingLimit);
+    }
+
+    UploadQueue.Admission admit(UploadRequestObserver upload) {
+        return queue.admit(upload);
+    }
+
+    void release(UploadRequestObserver upload) {
+        UploadRequestObserver next = queue.release(upload);
+        if (next != null) {
+            // Start outside the queue lock without taking two observer locks on one thread.
+            Thread.startVirtualThread(next::startUpload);
+        }
+    }
+
     public boolean validate(String filename, long size) {
         if (filename == null || !filename.toLowerCase(Locale.ROOT).endsWith(".mp4")) {
             return false;

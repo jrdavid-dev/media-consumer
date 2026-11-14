@@ -26,7 +26,7 @@ final class UploadFile {
         receivedBytes += chunk.size();
     }
 
-    void complete() throws IOException {
+    void complete(String originalName) throws IOException {
         if (receivedBytes != expectedBytes) {
             throw new IllegalArgumentException("Received byte count does not match the expected size.");
         }
@@ -34,7 +34,18 @@ final class UploadFile {
         output = null;
         String temporaryName = temporaryFile.getFileName().toString();
         String videoName = temporaryName.substring(0, temporaryName.length() - ".part".length()) + ".mp4";
-        Files.move(temporaryFile, temporaryFile.resolveSibling(videoName));
+        Path metadata = temporaryFile.resolveSibling(videoName.replace(".mp4", ".name"));
+        Files.writeString(metadata, originalName, java.nio.file.StandardOpenOption.CREATE_NEW);
+        try {
+            Files.move(temporaryFile, temporaryFile.resolveSibling(videoName));
+        } catch (IOException error) {
+            try {
+                Files.deleteIfExists(metadata);
+            } catch (IOException cleanupError) {
+                error.addSuppressed(cleanupError);
+            }
+            throw error;
+        }
         temporaryFile = null;
     }
 

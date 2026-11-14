@@ -11,6 +11,11 @@
   </properties>
   <dependencies>
     <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+      <version>3.4.5</version>
+    </dependency>
+    <dependency>
       <groupId>io.grpc</groupId>
       <artifactId>grpc-netty-shaded</artifactId>
       <version>${grpc.version}</version>
@@ -74,7 +79,55 @@
           <mainClass>media.upload.Main</mainClass>
         </manifest></archive></configuration>
       </plugin>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>3.4.5</version>
+        <configuration><mainClass>media.upload.Main</mainClass></configuration>
+        <executions>
+          <execution>
+            <goals><goal>repackage</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>bundle-gallery</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <version>3.5.0</version>
+            <configuration>
+              <workingDirectory>${project.basedir}/frontend</workingDirectory>
+              <executable>node</executable>
+              <arguments>
+                <argument>node_modules/vite/bin/vite.js</argument>
+                <argument>build</argument>
+              </arguments>
+            </configuration>
+            <executions>
+              <execution>
+                <phase>generate-resources</phase>
+                <goals><goal>exec</goal></goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+        <resources>
+          <resource>
+            <directory>src/main/resources</directory>
+          </resource>
+          <resource>
+            <directory>frontend/dist</directory>
+            <targetPath>static</targetPath>
+          </resource>
+        </resources>
+      </build>
+    </profile>
+  </profiles>
 </project>
 
