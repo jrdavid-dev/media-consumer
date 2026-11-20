@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './gallery.css';
 
+const PREVIEW_SECONDS = 10;
+
 function Preview({ video, onOpen }) {
   const url = '/api/videos/' + video.id + '/content';
 
@@ -16,7 +18,11 @@ function Preview({ video, onOpen }) {
         onMouseEnter={event => event.currentTarget.play().catch(() => {})}
         onMouseLeave={event => stopPreview(event.currentTarget)}
         onTimeUpdate={event => {
-          if (event.currentTarget.currentTime >= 10) event.currentTarget.pause();
+          const player = event.currentTarget;
+          if (!player.paused && player.currentTime >= PREVIEW_SECONDS) {
+            player.pause();
+            player.currentTime = PREVIEW_SECONDS;
+          }
         }} />
       <span>{video.filename}</span>
     </button>

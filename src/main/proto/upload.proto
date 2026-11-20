@@ -19,6 +19,7 @@ message UploadRequest {
 message UploadMetadata {
   string filename = 1;
   int64 expected_bytes = 2;
+  optional bytes sha256 = 3;
 }
 
 message UploadResponse {

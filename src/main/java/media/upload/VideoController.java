@@ -27,7 +27,7 @@ public class VideoController {
             var videos = new java.util.ArrayList<Video>();
             for (Path file : files.sorted().toList()) {
                 String name = file.getFileName().toString();
-                if (!name.matches("video-[0-9]+\\.mp4") || !Files.isRegularFile(file)) {
+                if (!UploadStorage.isPublishedVideo(file)) {
                     continue;
                 }
                 String id = name.substring(0, name.length() - 4);

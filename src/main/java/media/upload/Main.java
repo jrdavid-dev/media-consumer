@@ -4,7 +4,9 @@ import io.grpc.Server;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import java.io.IOException;
+import java.util.Locale;
 import java.util.Scanner;
+import java.util.concurrent.Executors;
 
 @SpringBootApplication
 public class Main {
@@ -19,14 +21,42 @@ public class Main {
             return;
         }
 
+        boolean compressionEnabled = readCompression(input);
+        String ffmpegExecutable = System.getenv().getOrDefault("UPLOAD_FFMPEG", "");
+        if (ffmpegExecutable.isBlank()) {
+            ffmpegExecutable = "ffmpeg";
+        }
         int port = 9090;
-        Server server = new ConsumerGrpcConfig().createServer(port, activeLimit, waitingLimit);
-        server.start();
-        System.out.println("Consumer gRPC server listening on port " + port);
-        try (var web = SpringApplication.run(Main.class, "--server.port=8080")) {
-            server.awaitTermination();
-        } finally {
-            server.shutdown();
+        try (var uploadWorkers = Executors.newFixedThreadPool(activeLimit)) {
+            Server server = new ConsumerGrpcConfig()
+                    .createServer(port, activeLimit, waitingLimit, uploadWorkers, ffmpegExecutable, compressionEnabled);
+            server.start();
+            System.out.println("Consumer gRPC server listening on port " + port);
+            try (var web = SpringApplication.run(Main.class, "--server.port=8080")) {
+                server.awaitTermination();
+            } finally {
+                server.shutdownNow();
+                server.awaitTermination();
+            }
+        }
+    }
+
+    private static boolean readCompression(Scanner input) {
+        while (true) {
+            System.out.print("Enable video compression? [y/N]: ");
+            if (!input.hasNextLine()) {
+                return false;
+            }
+
+            switch (input.nextLine().trim().toLowerCase(Locale.ROOT)) {
+                case "y", "yes" -> {
+                    return true;
+                }
+                case "", "n", "no" -> {
+                    return false;
+                }
+                default -> System.err.println("Enter yes or no.");
+            }
         }
     }
 

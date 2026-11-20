@@ -8,26 +8,31 @@ import media.upload.grpc.UploadResponse;
 import media.upload.grpc.UploadStatus;
 
 import java.io.IOException;
+import java.util.HexFormat;
 
 final class UploadRequestObserver implements StreamObserver<UploadRequest> {
+    private static final int SHA256_BYTES = 32;
+
     private final UploadService uploadService;
     private final StreamObserver<UploadResponse> responses;
+
+    private UploadFile uploadFile;
+    private long expectedBytes;
+    private String filename;
+    private String expectedDigest;
+
+    private boolean metadataReceived;
+    private boolean readySent;
+    private boolean finished;
 
     UploadRequestObserver(UploadService uploadService, StreamObserver<UploadResponse> responses) {
         this.uploadService = uploadService;
         this.responses = responses;
     }
 
-    private UploadFile uploadFile;
-    private long expectedBytes;
-    private String filename;
-
     String filename() {
         return filename;
     }
-    private boolean metadataReceived;
-    private boolean readySent;
-    private boolean finished;
 
     @Override
     public synchronized void onNext(UploadRequest request) {
@@ -56,12 +61,24 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
 
         UploadMetadata metadata = request.getMetadata();
         if (!uploadService.validate(metadata.getFilename(), metadata.getExpectedBytes())) {
-            reject("Expected an MP4 filename without path separators and a positive size.");
+            reject("Expected a supported video filename without path separators and a positive size.");
             return;
         }
 
         filename = metadata.getFilename();
         expectedBytes = metadata.getExpectedBytes();
+        if (metadata.hasSha256()) {
+            if (metadata.getSha256().size() != SHA256_BYTES) {
+                reject("Expected a 32-byte SHA-256 digest.");
+                return;
+            }
+            expectedDigest = HexFormat.of().formatHex(metadata.getSha256().toByteArray());
+            if (uploadService.isDuplicate(expectedDigest)) {
+                rejectDuplicate();
+                return;
+            }
+        }
+
         metadataReceived = true;
         switch (uploadService.admit(this)) {
             case START_NOW -> startUpload();
@@ -72,6 +89,12 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
 
     synchronized void startUpload() {
         if (finished || readySent) {
+            return;
+        }
+
+        // A different upload may have published the same content while this request waited.
+        if (expectedDigest != null && uploadService.isDuplicate(expectedDigest)) {
+            rejectDuplicate();
             return;
         }
 
@@ -102,7 +125,7 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
     }
 
     @Override
-    public void onError(Throwable error) {
+    public synchronized void onError(Throwable error) {
         if (finished) {
             return;
         }
@@ -110,7 +133,7 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
     }
 
     @Override
-    public void onCompleted() {
+    public synchronized void onCompleted() {
         if (finished) {
             return;
         }
@@ -121,12 +144,19 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
         }
 
         try {
-            uploadFile.complete(filename);
+            if (!uploadService.completeUpload(uploadFile, filename, expectedDigest)) {
+                rejectDuplicate();
+                return;
+            }
         } catch (IllegalArgumentException error) {
             reject(error.getMessage());
             return;
         } catch (IOException error) {
-            fail(Status.INTERNAL, "Could not save the completed video.");
+            System.err.println("Could not save " + filename + ": " + error);
+            if (error.getCause() != null) {
+                System.err.println(error.getCause());
+            }
+            fail(Status.INTERNAL, "Could not convert or save the uploaded video. See the consumer log.");
             return;
         }
 
@@ -137,6 +167,12 @@ final class UploadRequestObserver implements StreamObserver<UploadRequest> {
         } finally {
             finishUpload();
         }
+    }
+
+    private void rejectDuplicate() {
+        String stage = readySent ? "after transfer" : "before transfer";
+        System.out.println("Duplicate upload (" + stage + "): " + filename);
+        fail(Status.ALREADY_EXISTS, "A video with the same content already exists.");
     }
 
     private void reject(String message) {
